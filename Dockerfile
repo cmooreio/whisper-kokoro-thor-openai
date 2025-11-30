@@ -20,10 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build CTranslate2 with CUDA support
 # Using v4.5.0 for stability - matches faster-whisper requirements
-# Thor (Blackwell sm_100) - patch CMakeLists.txt to force architecture since FindCUDA is outdated
+# Thor (Blackwell) - patch CMakeLists.txt to force architecture since FindCUDA is outdated
+# Use compute_90 only - Hopper PTX runs on Blackwell via forward compatibility
+# (compute_100 requires CUDA 13.0+ but ONNX Runtime v1.20.1 incompatible with CUDA 13.0)
 RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
     && cd /tmp/ctranslate2 \
-    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode=arch=compute_90,code=sm_90;-gencode=arch=compute_100,code=compute_100")/' CMakeLists.txt \
+    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode=arch=compute_90,code=sm_90;-gencode=arch=compute_90,code=compute_90")/' CMakeLists.txt \
     && mkdir build && cd build \
     && cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
@@ -66,7 +68,7 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
         --skip_tests \
         --allow_running_as_root \
         --cmake_extra_defines \
-            CMAKE_CUDA_ARCHITECTURES="90;100" \
+            CMAKE_CUDA_ARCHITECTURES="90" \
             FETCHCONTENT_SOURCE_DIR_EIGEN=/tmp/eigen \
             onnxruntime_BUILD_UNIT_TESTS=OFF \
     && cp /tmp/onnxruntime/build/Linux/Release/dist/*.whl /wheels/ \
