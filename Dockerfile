@@ -1,9 +1,9 @@
-# Stage 1: Build CTranslate2 with CUDA for ARM64 SBSA
+# Stage 1: Build CTranslate2 and ONNX Runtime with CUDA for ARM64 SBSA (Thor/Blackwell)
 FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build dependencies
+# Build dependencies for both CTranslate2 and ONNX Runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     cmake \
@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-dev \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # Build CTranslate2 with CUDA support
 # Using v4.5.0 for stability - matches faster-whisper requirements
-# Note: --recurse-submodules needed for spdlog, -DOPENMP_RUNTIME=NONE to skip Intel MKL OpenMP
 # Thor (Blackwell sm_100) - patch CMakeLists.txt to force architecture since FindCUDA is outdated
 RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
     && cd /tmp/ctranslate2 \
@@ -32,11 +32,33 @@ RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CT
     && make -j$(nproc) \
     && make install
 
-# Build Python bindings
+# Build CTranslate2 Python bindings
 RUN cd /tmp/ctranslate2/python \
     && pip install --break-system-packages pybind11 \
     && pip wheel --no-deps --wheel-dir /wheels . \
     && rm -rf /tmp/ctranslate2
+
+# Build ONNX Runtime with CUDA support for ARM64 SBSA
+# Using release branch for stability, with CUDA EP (Execution Provider)
+# Thor Blackwell GPU: compute_90 (Hopper binary) + compute_100 (Blackwell PTX for JIT)
+RUN pip install --break-system-packages packaging wheel setuptools numpy
+
+RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxruntime.git /tmp/onnxruntime \
+    && cd /tmp/onnxruntime \
+    && ./build.sh \
+        --config Release \
+        --build_shared_lib \
+        --build_wheel \
+        --use_cuda \
+        --cuda_home /usr/local/cuda \
+        --cudnn_home /usr \
+        --parallel $(nproc) \
+        --skip_tests \
+        --cmake_extra_defines \
+            CMAKE_CUDA_ARCHITECTURES="90;100" \
+            onnxruntime_BUILD_UNIT_TESTS=OFF \
+    && cp /tmp/onnxruntime/build/Linux/Release/dist/*.whl /wheels/ \
+    && rm -rf /tmp/onnxruntime
 
 # Stage 2: Runtime image
 FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
@@ -64,7 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/bin/python
 
-# Install CTranslate2 wheel first (with CUDA support)
+# Install our custom-built wheels first (CTranslate2 and ONNX Runtime with CUDA)
 RUN pip install --no-cache-dir --break-system-packages /wheels/*.whl \
     && rm -rf /wheels
 
@@ -72,12 +94,8 @@ RUN pip install --no-cache-dir --break-system-packages /wheels/*.whl \
 # - fastapi + uvicorn: API server
 # - python-multipart: file uploads
 # - faster-whisper: uses our CUDA-enabled CTranslate2
-# - kokoro-onnx: ONNX-based Kokoro TTS (installed without onnxruntime dep)
+# - kokoro-onnx: ONNX-based Kokoro TTS (--no-deps to use our CUDA ONNX Runtime)
 # - soundfile: write WAV to BytesIO
-# - onnxruntime-gpu: CUDA-enabled ONNX Runtime from NVIDIA (built for ARM64 SBSA)
-#
-# Note: Install onnxruntime-gpu from NVIDIA's wheel index for ARM64 CUDA support
-# This provides CUDAExecutionProvider for Kokoro TTS GPU acceleration
 RUN pip install --no-cache-dir --break-system-packages \
     fastapi \
     "uvicorn[standard]" \
@@ -85,9 +103,6 @@ RUN pip install --no-cache-dir --break-system-packages \
     faster-whisper \
     soundfile \
     huggingface_hub \
-    && pip install --no-cache-dir --break-system-packages \
-    --extra-index-url https://pypi.nvidia.com \
-    onnxruntime-gpu \
     && pip install --no-cache-dir --break-system-packages --no-deps \
     "kokoro-onnx>=0.4.0"
 

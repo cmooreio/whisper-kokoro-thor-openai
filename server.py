@@ -10,6 +10,13 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
 from kokoro_onnx import Kokoro
+import onnxruntime as ort
+import ctranslate2
+
+# ---- Diagnostics ------------------------------------------------------------
+
+print(f"[init] CTranslate2 CUDA device count: {ctranslate2.get_cuda_device_count()}")
+print(f"[init] ONNX Runtime available providers: {ort.get_available_providers()}")
 
 # ---- Model init -------------------------------------------------------------
 
