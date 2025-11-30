@@ -72,16 +72,24 @@ RUN pip install --no-cache-dir --break-system-packages /wheels/*.whl \
 # - fastapi + uvicorn: API server
 # - python-multipart: file uploads
 # - faster-whisper: uses our CUDA-enabled CTranslate2
-# - kokoro-onnx: ONNX-based Kokoro TTS
+# - kokoro-onnx: ONNX-based Kokoro TTS (installed without onnxruntime dep)
 # - soundfile: write WAV to BytesIO
+# - onnxruntime-gpu: CUDA-enabled ONNX Runtime from NVIDIA (built for ARM64 SBSA)
+#
+# Note: Install onnxruntime-gpu from NVIDIA's wheel index for ARM64 CUDA support
+# This provides CUDAExecutionProvider for Kokoro TTS GPU acceleration
 RUN pip install --no-cache-dir --break-system-packages \
     fastapi \
     "uvicorn[standard]" \
     python-multipart \
     faster-whisper \
-    "kokoro-onnx>=0.4.0" \
     soundfile \
-    huggingface_hub
+    huggingface_hub \
+    && pip install --no-cache-dir --break-system-packages \
+    --extra-index-url https://pypi.nvidia.com \
+    onnxruntime-gpu \
+    && pip install --no-cache-dir --break-system-packages --no-deps \
+    "kokoro-onnx>=0.4.0"
 
 WORKDIR /app
 COPY server.py /app/server.py
