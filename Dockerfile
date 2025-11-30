@@ -54,6 +54,7 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
         --cudnn_home /usr \
         --parallel $(nproc) \
         --skip_tests \
+        --allow_running_as_root \
         --cmake_extra_defines \
             CMAKE_CUDA_ARCHITECTURES="90;100" \
             onnxruntime_BUILD_UNIT_TESTS=OFF \
