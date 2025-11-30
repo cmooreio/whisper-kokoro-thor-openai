@@ -45,6 +45,12 @@ RUN cd /tmp/ctranslate2/python \
 # Thor Blackwell GPU: compute_90 (Hopper binary) + compute_100 (Blackwell PTX for JIT)
 RUN pip install --break-system-packages packaging wheel setuptools numpy
 
+# Pre-clone Eigen from git to avoid hash mismatch with GitLab's regenerated zip archives
+# ONNX Runtime v1.20.1 requires this specific commit
+RUN git clone https://gitlab.com/libeigen/eigen.git /tmp/eigen \
+    && cd /tmp/eigen \
+    && git checkout e7248b26a1ed53fa030c5c459f7ea095dfd276ac
+
 RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxruntime.git /tmp/onnxruntime \
     && cd /tmp/onnxruntime \
     && ./build.sh \
@@ -59,10 +65,10 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
         --allow_running_as_root \
         --cmake_extra_defines \
             CMAKE_CUDA_ARCHITECTURES="90;100" \
-            CMAKE_TLS_VERIFY=OFF \
+            FETCHCONTENT_SOURCE_DIR_EIGEN=/tmp/eigen \
             onnxruntime_BUILD_UNIT_TESTS=OFF \
     && cp /tmp/onnxruntime/build/Linux/Release/dist/*.whl /wheels/ \
-    && rm -rf /tmp/onnxruntime
+    && rm -rf /tmp/onnxruntime /tmp/eigen
 
 # Stage 2: Runtime image
 FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
