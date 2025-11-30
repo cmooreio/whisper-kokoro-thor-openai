@@ -16,8 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Build CTranslate2 with CUDA support
 # Using v4.5.0 for stability - matches faster-whisper requirements
 # Note: --recurse-submodules needed for spdlog, -DOPENMP_RUNTIME=NONE to skip Intel MKL OpenMP
+# Thor (Blackwell sm_100) - patch CMakeLists.txt to force architecture since FindCUDA is outdated
 RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
     && cd /tmp/ctranslate2 \
+    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode=arch=compute_90,code=sm_90;-gencode=arch=compute_100,code=compute_100")/' CMakeLists.txt \
     && mkdir build && cd build \
     && cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
@@ -26,7 +28,6 @@ RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CT
         -DWITH_MKL=OFF \
         -DWITH_OPENBLAS=OFF \
         -DOPENMP_RUNTIME=NONE \
-        -DCUDA_ARCH_LIST="11.0" \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
     && make -j$(nproc) \
     && make install
