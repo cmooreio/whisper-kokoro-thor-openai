@@ -1,28 +1,32 @@
 import io
 import os
 import tempfile
-from typing import Optional, List
+from pathlib import Path
+from typing import Optional
 
-import numpy as np
 import soundfile as sf
-import torch
-import whisper
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from kokoro import KPipeline
+from faster_whisper import WhisperModel
+from kokoro_onnx import Kokoro
 
-# ---- GPU / model init -------------------------------------------------------
+# ---- Model init -------------------------------------------------------------
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+whisper_model_id = os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
 
-whisper_model_name = os.getenv("WHISPER_MODEL", "small")
-print(f"[init] Loading Whisper model '{whisper_model_name}' on {device}")
-whisper_model = whisper.load_model(whisper_model_name, device=device)
+# Kokoro model paths - can be explicit paths or will look in /models/kokoro/
+kokoro_onnx_path = os.getenv("KOKORO_ONNX_PATH", "/models/kokoro/kokoro-v1.0.onnx")
+kokoro_voices_path = os.getenv("KOKORO_VOICES_PATH", "/models/kokoro/voices-v1.0.bin")
 
-lang_code = os.getenv("KOKORO_LANG_CODE", "a")  # 'a' = American English
-print(f"[init] Initializing Kokoro KPipeline(lang_code='{lang_code}')")
-kokoro_pipeline = KPipeline(lang_code=lang_code)
+# faster-whisper: auto selects CUDA if available
+print(f"[init] Loading faster-whisper model '{whisper_model_id}'")
+whisper_model = WhisperModel(whisper_model_id, device="cuda", compute_type="float16")
+
+# kokoro-onnx: requires model.onnx and voices.bin paths
+print(f"[init] Loading Kokoro ONNX model from '{kokoro_onnx_path}'")
+kokoro = Kokoro(kokoro_onnx_path, kokoro_voices_path)
+print(f"[init] Kokoro loaded successfully")
 
 default_voice = os.getenv("KOKORO_VOICE", "af_heart")
 kokoro_model_ids_env = os.getenv(
@@ -30,7 +34,7 @@ kokoro_model_ids_env = os.getenv(
 )
 KOKORO_MODEL_IDS = {m.strip() for m in kokoro_model_ids_env.split(",") if m.strip()}
 
-app = FastAPI(title="thor-audio-openai", version="0.1.0")
+app = FastAPI(title="whisper-kokoro-thor-openai", version="0.2.0")
 
 
 # ---- Schemas ----------------------------------------------------------------
@@ -39,25 +43,17 @@ class SpeechRequest(BaseModel):
     model: str
     input: str
     voice: Optional[str] = None
-    format: Optional[str] = "wav"  # 'wav' for now; easy to extend later
+    format: Optional[str] = "wav"
 
 
 # ---- Health check -----------------------------------------------------------
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "device": device}
+    return {"status": "ok", "whisper": whisper_model_id, "kokoro": kokoro_onnx_path}
 
 
 # ---- /v1/audio/transcriptions ----------------------------------------------
-# OpenAI-style endpoint:
-#   POST multipart/form-data with:
-#     - file: audio file
-#     - model: string (ignored, but accepted; e.g. "whisper-1")
-#     - language, response_format, temperature, prompt (optional)
-# Response:
-#   { "text": "transcribed text" }
-
 
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(
@@ -68,47 +64,43 @@ async def transcriptions(
     temperature: float = Form(0.0),
     prompt: Optional[str] = Form(None),
 ):
-    # Read uploaded audio into a temp file for whisper
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio file")
 
-    with tempfile.NamedTemporaryFile(delete=True, suffix=file.filename) as tmp:
+    # Write to temp file for faster-whisper
+    suffix = os.path.splitext(file.filename or "audio.wav")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(delete=True, suffix=suffix) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
-        # Whisper uses fp16 on CUDA, fp32 on CPU
-        result = whisper_model.transcribe(
+
+        # faster-whisper transcribe
+        segments, info = whisper_model.transcribe(
             tmp.name,
             language=language,
-            fp16=(device == "cuda"),
+            initial_prompt=prompt,
+            temperature=temperature if temperature > 0 else 0.0,
+            vad_filter=True,
         )
-
-    text = (result.get("text") or "").strip()
+        # Collect all segment texts
+        text = " ".join(segment.text.strip() for segment in segments)
 
     if response_format == "text":
-        return StreamingResponse(io.BytesIO(text.encode("utf-8")),
-                                 media_type="text/plain")
+        return StreamingResponse(
+            io.BytesIO(text.encode("utf-8")), media_type="text/plain"
+        )
 
-    # You can extend this to support verbose_json / srt / vtt etc.
     return JSONResponse({"text": text})
 
 
 # ---- /v1/audio/speech -------------------------------------------------------
-# OpenAI-style endpoint:
-#   POST application/json:
-#     { "model": "...", "input": "...", "voice": "af_heart", "format": "wav" }
-# Response body: raw audio bytes (WAV) in the HTTP body.
-
 
 @app.post("/v1/audio/speech")
 async def audio_speech(req: SpeechRequest):
-    # Speaches drop-in: accept speaches-style Kokoro model ids by default
     if req.model not in KOKORO_MODEL_IDS:
-        # You can relax this if you don't care about model names
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported model '{req.model}'. "
-                   f"Allowed: {sorted(KOKORO_MODEL_IDS)}",
+            detail=f"Unsupported model '{req.model}'. Allowed: {sorted(KOKORO_MODEL_IDS)}",
         )
 
     voice = req.voice or default_voice
@@ -116,37 +108,22 @@ async def audio_speech(req: SpeechRequest):
     if not text:
         raise HTTPException(status_code=400, detail="Empty input text")
 
-    # Run Kokoro: generator yields (graphemes, phonemes, audio_chunk)
-    # audio_chunk is a 1D numpy array of float32 samples at 24kHz
-    audio_chunks: List[np.ndarray] = []
     try:
-        generator = kokoro_pipeline(
-            text,
-            voice=voice,
-            speed=1.0,
-            split_pattern=r"\n+",
-        )
-        for _, _, audio in generator:
-            audio_chunks.append(audio)
+        # kokoro-onnx returns (samples, sample_rate)
+        samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Kokoro error: {e}")
 
-    if not audio_chunks:
+    if samples is None or len(samples) == 0:
         raise HTTPException(status_code=500, detail="Kokoro returned no audio")
 
-    audio = np.concatenate(audio_chunks)
-
-    # Right now we only support WAV output.
-    # You can add MP3/OGG later via ffmpeg/pydub if needed.
+    # Write WAV to buffer
     buf = io.BytesIO()
-    sf.write(buf, audio, 24000, format="WAV")
+    sf.write(buf, samples, sample_rate, format="WAV")
     buf.seek(0)
 
     return StreamingResponse(
         buf,
         media_type="audio/wav",
-        headers={
-            # Some clients like a filename
-            "Content-Disposition": 'attachment; filename="speech.wav"',
-        },
+        headers={"Content-Disposition": 'attachment; filename="speech.wav"'},
     )

@@ -1,42 +1,48 @@
-# Thor-friendly base: JetPack 7 / CUDA 13 / PyTorch 2.8
-FROM nvcr.io/nvidia/pytorch:25.08-py3
+# CUDA 12.6 runtime with cuDNN - no pre-compiled PyTorch to avoid numpy conflicts
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # System deps:
-# - ffmpeg: required by openai-whisper
+# - python3 + pip: Python runtime
+# - ffmpeg: required for audio processing
 # - espeak-ng: used by kokoro for some fallback G2P cases
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
     ffmpeg \
     espeak-ng \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/python3 /usr/bin/python
 
 # Python deps:
 # - fastapi + uvicorn: API server
 # - python-multipart: file uploads
-# - openai-whisper: STT (Torch-based, CUDA-aware)
-# - kokoro: Kokoro-82M inference library
+# - faster-whisper: CTranslate2-based Whisper with CUDA support
+# - kokoro-onnx: ONNX-based Kokoro TTS
 # - soundfile: write WAV to BytesIO
-# - misaki[en]: G2P for English (as per kokoro README)
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir --break-system-packages \
     fastapi \
     "uvicorn[standard]" \
     python-multipart \
-    openai-whisper \
-    "kokoro>=0.9.4" \
+    faster-whisper \
+    "kokoro-onnx>=0.4.0" \
     soundfile \
-    "misaki[en]"
+    huggingface_hub
 
 WORKDIR /app
 COPY server.py /app/server.py
 
-# Defaults – you can override with env vars / compose
-ENV WHISPER_MODEL=small \
-    KOKORO_LANG_CODE=a \
-    KOKORO_VOICE=af_heart \
-    # Accept these model IDs for /v1/audio/speech (drop-in for Speaches)
+# Defaults – override with env vars
+# WHISPER_MODEL: HuggingFace model ID or local path
+# KOKORO_MODEL: HuggingFace model ID or local path
+ENV WHISPER_MODEL="Systran/faster-distil-whisper-large-v3" \
+    KOKORO_MODEL="speaches-ai/Kokoro-82M-v1.0-ONNX" \
+    KOKORO_VOICE="af_heart" \
     KOKORO_MODEL_IDS="kokoro-tts,speaches-ai/Kokoro-82M-v1.0-ONNX" \
+    # Offline mode: set HF_HUB_OFFLINE=1 and mount cache to /root/.cache/huggingface/hub
+    HF_HUB_OFFLINE=0 \
     HOST=0.0.0.0 \
     PORT=8000
 
