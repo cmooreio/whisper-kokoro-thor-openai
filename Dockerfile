@@ -1,5 +1,7 @@
 # Stage 1: Build CTranslate2 and ONNX Runtime with CUDA for ARM64 SBSA (Thor/Blackwell)
-FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04 AS builder
+# Using CUDA 12.6.3 instead of 13.0 due to ONNX Runtime incompatibility with CCCL 3.0
+# (thrust::unary_function removed in CUDA 13.0, see github.com/microsoft/onnxruntime/issues/23499)
+FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -71,7 +73,7 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
     && rm -rf /tmp/onnxruntime /tmp/eigen
 
 # Stage 2: Runtime image
-FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
+FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
