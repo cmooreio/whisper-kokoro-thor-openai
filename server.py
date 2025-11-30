@@ -19,9 +19,11 @@ whisper_model_id = os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-lar
 kokoro_onnx_path = os.getenv("KOKORO_ONNX_PATH", "/models/kokoro/kokoro-v1.0.onnx")
 kokoro_voices_path = os.getenv("KOKORO_VOICES_PATH", "/models/kokoro/voices-v1.0.bin")
 
-# faster-whisper: auto selects CUDA if available
-print(f"[init] Loading faster-whisper model '{whisper_model_id}'")
-whisper_model = WhisperModel(whisper_model_id, device="cuda", compute_type="float16")
+# faster-whisper with CUDA (CTranslate2 compiled with CUDA support)
+whisper_device = os.getenv("WHISPER_DEVICE", "cuda")
+whisper_compute = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
+print(f"[init] Loading faster-whisper model '{whisper_model_id}' on device={whisper_device}")
+whisper_model = WhisperModel(whisper_model_id, device=whisper_device, compute_type=whisper_compute)
 
 # kokoro-onnx: requires model.onnx and voices.bin paths
 print(f"[init] Loading Kokoro ONNX model from '{kokoro_onnx_path}'")
