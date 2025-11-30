@@ -4,6 +4,7 @@ FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Build dependencies for both CTranslate2 and ONNX Runtime
+# Include libeigen3-dev to avoid FetchContent download from GitLab (often blocked)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     cmake \
@@ -12,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-dev \
     ninja-build \
+    libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build CTranslate2 with CUDA support
@@ -55,6 +57,8 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
         --parallel $(nproc) \
         --skip_tests \
         --allow_running_as_root \
+        --use_preinstalled_eigen \
+        --eigen_path /usr/include/eigen3 \
         --cmake_extra_defines \
             CMAKE_CUDA_ARCHITECTURES="90;100" \
             onnxruntime_BUILD_UNIT_TESTS=OFF \
