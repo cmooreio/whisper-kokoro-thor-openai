@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build CTranslate2 with CUDA support
 # Using v4.5.0 for stability - matches faster-whisper requirements
-RUN git clone --depth 1 --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
+# Note: --recurse-submodules needed for spdlog, -DOPENMP_RUNTIME=NONE to skip Intel MKL OpenMP
+RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
     && cd /tmp/ctranslate2 \
     && mkdir build && cd build \
     && cmake .. \
@@ -24,6 +25,7 @@ RUN git clone --depth 1 --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.g
         -DWITH_CUDNN=ON \
         -DWITH_MKL=OFF \
         -DWITH_OPENBLAS=OFF \
+        -DOPENMP_RUNTIME=NONE \
         -DCUDA_ARCH_LIST="9.0" \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
     && make -j$(nproc) \
