@@ -1,5 +1,5 @@
-# CUDA 12.6 runtime with cuDNN - no pre-compiled PyTorch to avoid numpy conflicts
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+# CUDA 13.0 runtime with cuDNN - no pre-compiled PyTorch to avoid numpy conflicts
+FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
