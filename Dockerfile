@@ -119,7 +119,8 @@ RUN pip install --no-cache-dir --break-system-packages \
     huggingface_hub \
     && pip install --no-cache-dir --break-system-packages --no-deps \
     "kokoro-onnx>=0.4.0" \
-    && pip install --no-cache-dir --break-system-packages colorlog
+    && pip install --no-cache-dir --break-system-packages \
+    colorlog espeakng-loader phonemizer-fork
 
 WORKDIR /app
 COPY server.py /app/server.py
