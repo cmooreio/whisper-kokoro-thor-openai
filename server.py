@@ -1,9 +1,11 @@
 import io
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -43,7 +45,7 @@ kokoro_model_ids_env = os.getenv(
 )
 KOKORO_MODEL_IDS = {m.strip() for m in kokoro_model_ids_env.split(",") if m.strip()}
 
-app = FastAPI(title="whisper-kokoro-thor-openai", version="0.2.0")
+app = FastAPI(title="whisper-kokoro-thor-openai", version="0.3.0")
 
 
 # ---- Schemas ----------------------------------------------------------------
@@ -52,7 +54,89 @@ class SpeechRequest(BaseModel):
     model: str
     input: str
     voice: Optional[str] = None
-    format: Optional[str] = "wav"
+    response_format: Optional[str] = "mp3"  # OpenAI API default is mp3
+    speed: Optional[float] = 1.0
+
+
+# ---- Audio format conversion ------------------------------------------------
+
+# Supported formats and their MIME types
+AUDIO_FORMATS = {
+    "mp3": {"mime": "audio/mpeg", "ext": "mp3", "ffmpeg_fmt": "mp3"},
+    "opus": {"mime": "audio/opus", "ext": "opus", "ffmpeg_fmt": "opus"},
+    "aac": {"mime": "audio/aac", "ext": "aac", "ffmpeg_fmt": "adts"},
+    "flac": {"mime": "audio/flac", "ext": "flac", "ffmpeg_fmt": "flac"},
+    "wav": {"mime": "audio/wav", "ext": "wav", "ffmpeg_fmt": "wav"},
+    "pcm": {"mime": "audio/pcm", "ext": "pcm", "ffmpeg_fmt": "s16le"},
+}
+
+
+def convert_audio(samples: np.ndarray, sample_rate: int, output_format: str) -> tuple[io.BytesIO, str, str]:
+    """Convert audio samples to the requested format using ffmpeg.
+
+    Returns: (audio_buffer, mime_type, file_extension)
+    """
+    if output_format not in AUDIO_FORMATS:
+        output_format = "mp3"  # fallback to default
+
+    fmt = AUDIO_FORMATS[output_format]
+
+    # For WAV, we can use soundfile directly (faster)
+    if output_format == "wav":
+        buf = io.BytesIO()
+        sf.write(buf, samples, sample_rate, format="WAV")
+        buf.seek(0)
+        return buf, fmt["mime"], fmt["ext"]
+
+    # For PCM, output raw samples
+    if output_format == "pcm":
+        # Convert to 16-bit signed integers
+        pcm_data = (samples * 32767).astype(np.int16).tobytes()
+        buf = io.BytesIO(pcm_data)
+        return buf, fmt["mime"], fmt["ext"]
+
+    # For other formats, use ffmpeg to convert from WAV
+    # First write WAV to a temp buffer
+    wav_buf = io.BytesIO()
+    sf.write(wav_buf, samples, sample_rate, format="WAV")
+    wav_data = wav_buf.getvalue()
+
+    # Run ffmpeg to convert
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-f", "wav",
+        "-i", "pipe:0",
+        "-f", fmt["ffmpeg_fmt"],
+    ]
+
+    # Add format-specific options
+    if output_format == "mp3":
+        cmd.extend(["-codec:a", "libmp3lame", "-q:a", "2"])
+    elif output_format == "opus":
+        cmd.extend(["-codec:a", "libopus", "-b:a", "96k"])
+    elif output_format == "aac":
+        cmd.extend(["-codec:a", "aac", "-b:a", "128k"])
+    elif output_format == "flac":
+        cmd.extend(["-codec:a", "flac"])
+
+    cmd.append("pipe:1")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=wav_data,
+            capture_output=True,
+            check=True,
+        )
+        buf = io.BytesIO(result.stdout)
+        return buf, fmt["mime"], fmt["ext"]
+    except subprocess.CalledProcessError as e:
+        # Log error and fallback to WAV
+        print(f"[audio] ffmpeg conversion failed: {e.stderr.decode()}")
+        wav_buf.seek(0)
+        return wav_buf, "audio/wav", "wav"
 
 
 # ---- Health check -----------------------------------------------------------
@@ -117,22 +201,24 @@ async def audio_speech(req: SpeechRequest):
     if not text:
         raise HTTPException(status_code=400, detail="Empty input text")
 
+    # Get speed, default to 1.0
+    speed = req.speed if req.speed and req.speed > 0 else 1.0
+
     try:
         # kokoro-onnx returns (samples, sample_rate)
-        samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
+        samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang="en-us")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Kokoro error: {e}")
 
     if samples is None or len(samples) == 0:
         raise HTTPException(status_code=500, detail="Kokoro returned no audio")
 
-    # Write WAV to buffer
-    buf = io.BytesIO()
-    sf.write(buf, samples, sample_rate, format="WAV")
-    buf.seek(0)
+    # Convert to requested format (default: mp3)
+    output_format = req.response_format or "mp3"
+    buf, mime_type, ext = convert_audio(samples, sample_rate, output_format)
 
     return StreamingResponse(
         buf,
-        media_type="audio/wav",
-        headers={"Content-Disposition": 'attachment; filename="speech.wav"'},
+        media_type=mime_type,
+        headers={"Content-Disposition": f'attachment; filename="speech.{ext}"'},
     )
