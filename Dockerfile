@@ -113,17 +113,21 @@ RUN pip install --no-cache-dir --break-system-packages /wheels/*.whl \
 # Python deps:
 # - fastapi + uvicorn: API server
 # - python-multipart: file uploads
-# - faster-whisper: uses our CUDA-enabled CTranslate2
+# - faster-whisper: uses our CUDA-enabled CTranslate2 (--no-deps to preserve our ONNX Runtime)
 # - kokoro-onnx: ONNX-based Kokoro TTS (--no-deps to use our CUDA ONNX Runtime)
 # - soundfile: write WAV to BytesIO
+# IMPORTANT: Install faster-whisper and kokoro-onnx with --no-deps to prevent PyPI's
+# CPU-only onnxruntime from overwriting our CUDA-enabled onnxruntime_gpu wheel
 RUN pip install --no-cache-dir --break-system-packages \
     fastapi \
     "uvicorn[standard]" \
     python-multipart \
-    faster-whisper \
     soundfile \
     huggingface_hub \
+    tokenizers \
+    av \
     && pip install --no-cache-dir --break-system-packages --no-deps \
+    faster-whisper \
     "kokoro-onnx>=0.4.0" \
     && pip install --no-cache-dir --break-system-packages \
     colorlog espeakng-loader phonemizer-fork
