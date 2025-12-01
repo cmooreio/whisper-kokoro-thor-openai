@@ -118,7 +118,8 @@ RUN pip install --no-cache-dir --break-system-packages \
     soundfile \
     huggingface_hub \
     && pip install --no-cache-dir --break-system-packages --no-deps \
-    "kokoro-onnx>=0.4.0"
+    "kokoro-onnx>=0.4.0" \
+    && pip install --no-cache-dir --break-system-packages colorlog
 
 WORKDIR /app
 COPY server.py /app/server.py
