@@ -55,6 +55,9 @@ RUN git clone https://gitlab.com/libeigen/eigen.git /tmp/eigen \
     && cd /tmp/eigen \
     && git checkout e7248b26a1ed53fa030c5c459f7ea095dfd276ac
 
+# Build ONNX Runtime with CUDA EP explicitly enabled
+# Key flags for ARM64 SBSA: must set onnxruntime_USE_CUDA=ON explicitly
+# and ensure CMAKE_CUDA_ARCHITECTURES matches the target GPU
 RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxruntime.git /tmp/onnxruntime \
     && cd /tmp/onnxruntime \
     && ./build.sh \
@@ -71,6 +74,9 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
             CMAKE_CUDA_ARCHITECTURES="90" \
             FETCHCONTENT_SOURCE_DIR_EIGEN=/tmp/eigen \
             onnxruntime_BUILD_UNIT_TESTS=OFF \
+            onnxruntime_USE_CUDA=ON \
+            onnxruntime_CUDA_HOME=/usr/local/cuda \
+            onnxruntime_CUDNN_HOME=/usr \
     && cp /tmp/onnxruntime/build/Linux/Release/dist/*.whl /wheels/ \
     && rm -rf /tmp/onnxruntime /tmp/eigen
 
