@@ -40,14 +40,18 @@ RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CT
 
 # Build CTranslate2 Python bindings
 RUN cd /tmp/ctranslate2/python \
-    && pip install --break-system-packages pybind11 \
+    && pip install --break-system-packages "pybind11==3.0.2" \
     && pip wheel --no-deps --wheel-dir /wheels . \
     && rm -rf /tmp/ctranslate2
 
 # Build ONNX Runtime with CUDA support for ARM64 SBSA
 # Using release branch for stability, with CUDA EP (Execution Provider)
 # Thor Blackwell GPU: compute_90 (Hopper binary) + compute_100 (Blackwell PTX for JIT)
-RUN pip install --break-system-packages packaging wheel setuptools numpy
+RUN pip install --break-system-packages \
+    "packaging==26.0" \
+    "wheel==0.46.3" \
+    "setuptools==82.0.1" \
+    "numpy==2.4.3"
 
 # Pre-clone Eigen from git to avoid hash mismatch with GitLab's regenerated zip archives
 # ONNX Runtime v1.20.1 requires this specific commit
@@ -116,21 +120,24 @@ RUN pip install --no-cache-dir --break-system-packages /wheels/*.whl \
 # - faster-whisper: uses our CUDA-enabled CTranslate2 (--no-deps to preserve our ONNX Runtime)
 # - kokoro-onnx: ONNX-based Kokoro TTS (--no-deps to use our CUDA ONNX Runtime)
 # - soundfile: write WAV to BytesIO
+# Pin direct dependencies so rebuilds stay reproducible.
 # IMPORTANT: Install faster-whisper and kokoro-onnx with --no-deps to prevent PyPI's
 # CPU-only onnxruntime from overwriting our CUDA-enabled onnxruntime_gpu wheel
 RUN pip install --no-cache-dir --break-system-packages \
-    fastapi \
-    "uvicorn[standard]" \
-    python-multipart \
-    soundfile \
-    huggingface_hub \
-    tokenizers \
-    av \
+    "fastapi==0.135.1" \
+    "uvicorn[standard]==0.42.0" \
+    "python-multipart==0.0.22" \
+    "soundfile==0.13.1" \
+    "huggingface_hub==1.7.2" \
+    "tokenizers==0.22.2" \
+    "av==17.0.0" \
     && pip install --no-cache-dir --break-system-packages --no-deps \
-    faster-whisper \
-    "kokoro-onnx>=0.4.0" \
+    "faster-whisper==1.2.1" \
+    "kokoro-onnx==0.5.0" \
     && pip install --no-cache-dir --break-system-packages \
-    colorlog espeakng-loader phonemizer-fork
+    "colorlog==6.10.1" \
+    "espeakng-loader==0.2.4" \
+    "phonemizer-fork==3.3.2"
 
 WORKDIR /app
 COPY server.py /app/server.py
