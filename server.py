@@ -2,18 +2,17 @@ import io
 import os
 import subprocess
 import tempfile
-from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
+import ctranslate2
 import numpy as np
+import onnxruntime as ort
 import soundfile as sf
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from faster_whisper import WhisperModel
 from kokoro_onnx import Kokoro
-import onnxruntime as ort
-import ctranslate2
+from pydantic import BaseModel
 
 # ---- Diagnostics ------------------------------------------------------------
 
@@ -37,18 +36,17 @@ whisper_model = WhisperModel(whisper_model_id, device=whisper_device, compute_ty
 # kokoro-onnx: requires model.onnx and voices.bin paths
 print(f"[init] Loading Kokoro ONNX model from '{kokoro_onnx_path}'")
 kokoro = Kokoro(kokoro_onnx_path, kokoro_voices_path)
-print(f"[init] Kokoro loaded successfully")
+print("[init] Kokoro loaded successfully")
 
 default_voice = os.getenv("KOKORO_VOICE", "af_heart")
-kokoro_model_ids_env = os.getenv(
-    "KOKORO_MODEL_IDS", "kokoro-tts,speaches-ai/Kokoro-82M-v1.0-ONNX"
-)
+kokoro_model_ids_env = os.getenv("KOKORO_MODEL_IDS", "kokoro-tts,speaches-ai/Kokoro-82M-v1.0-ONNX")
 KOKORO_MODEL_IDS = {m.strip() for m in kokoro_model_ids_env.split(",") if m.strip()}
 
 app = FastAPI(title="whisper-kokoro-thor-openai", version="0.3.0")
 
 
 # ---- Schemas ----------------------------------------------------------------
+
 
 class SpeechRequest(BaseModel):
     model: str
@@ -71,7 +69,9 @@ AUDIO_FORMATS = {
 }
 
 
-def convert_audio(samples: np.ndarray, sample_rate: int, output_format: str) -> tuple[io.BytesIO, str, str]:
+def convert_audio(
+    samples: np.ndarray, sample_rate: int, output_format: str
+) -> tuple[io.BytesIO, str, str]:
     """Convert audio samples to the requested format using ffmpeg.
 
     Returns: (audio_buffer, mime_type, file_extension)
@@ -105,10 +105,14 @@ def convert_audio(samples: np.ndarray, sample_rate: int, output_format: str) -> 
     cmd = [
         "ffmpeg",
         "-hide_banner",
-        "-loglevel", "error",
-        "-f", "wav",
-        "-i", "pipe:0",
-        "-f", fmt["ffmpeg_fmt"],
+        "-loglevel",
+        "error",
+        "-f",
+        "wav",
+        "-i",
+        "pipe:0",
+        "-f",
+        fmt["ffmpeg_fmt"],
     ]
 
     # Add format-specific options
@@ -141,6 +145,7 @@ def convert_audio(samples: np.ndarray, sample_rate: int, output_format: str) -> 
 
 # ---- Health check -----------------------------------------------------------
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "whisper": whisper_model_id, "kokoro": kokoro_onnx_path}
@@ -148,14 +153,15 @@ async def health():
 
 # ---- /v1/audio/transcriptions ----------------------------------------------
 
+
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(
-    file: UploadFile = File(...),
-    model: str = Form("whisper-1"),
-    language: Optional[str] = Form(None),
-    response_format: str = Form("json"),
-    temperature: float = Form(0.0),
-    prompt: Optional[str] = Form(None),
+    file: Annotated[UploadFile, File(...)],
+    model: Annotated[str, Form("whisper-1")],
+    language: Annotated[Optional[str], Form(None)],
+    response_format: Annotated[str, Form("json")],
+    temperature: Annotated[float, Form(0.0)],
+    prompt: Annotated[Optional[str], Form(None)],
 ):
     audio_bytes = await file.read()
     if not audio_bytes:
@@ -179,14 +185,13 @@ async def transcriptions(
         text = " ".join(segment.text.strip() for segment in segments)
 
     if response_format == "text":
-        return StreamingResponse(
-            io.BytesIO(text.encode("utf-8")), media_type="text/plain"
-        )
+        return StreamingResponse(io.BytesIO(text.encode("utf-8")), media_type="text/plain")
 
     return JSONResponse({"text": text})
 
 
 # ---- /v1/audio/speech -------------------------------------------------------
+
 
 @app.post("/v1/audio/speech")
 async def audio_speech(req: SpeechRequest):
@@ -208,7 +213,7 @@ async def audio_speech(req: SpeechRequest):
         # kokoro-onnx returns (samples, sample_rate)
         samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang="en-us")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Kokoro error: {e}")
+        raise HTTPException(status_code=500, detail=f"Kokoro error: {e}") from e
 
     if samples is None or len(samples) == 0:
         raise HTTPException(status_code=500, detail="Kokoro returned no audio")
