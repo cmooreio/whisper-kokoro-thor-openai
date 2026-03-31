@@ -1,7 +1,10 @@
 # Stage 1: Build CTranslate2 and ONNX Runtime with CUDA for ARM64 SBSA (Thor/Blackwell)
 # Using CUDA 12.6.3 instead of 13.0 due to ONNX Runtime incompatibility with CCCL 3.0
 # (thrust::unary_function removed in CUDA 13.0, see github.com/microsoft/onnxruntime/issues/23499)
-FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS builder
+FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04@sha256:50efab398f76258daa91ceebb33b6467e40217c67ea44fb5a2cebc6be7d9cce3 AS builder
+
+ARG CTRANSLATE2_REF=383d063daf0bf338a22b491864cb2018eb8efd15
+ARG ONNXRUNTIME_REF=5c1b7ccbff7e5141c1da7a9d963d660e5741c319
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -23,8 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Thor (Blackwell) - patch CMakeLists.txt to force architecture since FindCUDA is outdated
 # Use compute_90 only - Hopper PTX runs on Blackwell via forward compatibility
 # (compute_100 requires CUDA 13.0+ but ONNX Runtime v1.20.1 incompatible with CUDA 13.0)
-RUN git clone --recurse-submodules --branch v4.5.0 https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
+RUN git clone --filter=blob:none --recurse-submodules https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
     && cd /tmp/ctranslate2 \
+    && git checkout --detach "${CTRANSLATE2_REF}" \
+    && git submodule update --init --recursive \
     && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode=arch=compute_90,code=sm_90;-gencode=arch=compute_90,code=compute_90")/' CMakeLists.txt \
     && mkdir build && cd build \
     && cmake .. \
@@ -57,13 +62,15 @@ RUN pip install --break-system-packages \
 # ONNX Runtime v1.20.1 requires this specific commit
 RUN git clone https://gitlab.com/libeigen/eigen.git /tmp/eigen \
     && cd /tmp/eigen \
-    && git checkout e7248b26a1ed53fa030c5c459f7ea095dfd276ac
+    && git checkout --detach e7248b26a1ed53fa030c5c459f7ea095dfd276ac
 
 # Build ONNX Runtime with CUDA EP explicitly enabled
 # Key flags for ARM64 SBSA: must set onnxruntime_USE_CUDA=ON explicitly
 # and ensure CMAKE_CUDA_ARCHITECTURES matches the target GPU
-RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxruntime.git /tmp/onnxruntime \
+RUN git clone --filter=blob:none --recursive https://github.com/microsoft/onnxruntime.git /tmp/onnxruntime \
     && cd /tmp/onnxruntime \
+    && git checkout --detach "${ONNXRUNTIME_REF}" \
+    && git submodule update --init --recursive \
     && ./build.sh \
         --config Release \
         --build_shared_lib \
@@ -85,7 +92,7 @@ RUN git clone --recursive --branch v1.20.1 https://github.com/microsoft/onnxrunt
     && rm -rf /tmp/onnxruntime /tmp/eigen
 
 # Stage 2: Runtime image
-FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04@sha256:8aef630a54bc5c5146ae5ce68e6af5caa3df0fb690bb91544175c91f307e4356
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
