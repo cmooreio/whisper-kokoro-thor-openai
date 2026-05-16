@@ -157,11 +157,11 @@ async def health():
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(
     file: Annotated[UploadFile, File(...)],
-    model: Annotated[str, Form("whisper-1")],
-    language: Annotated[Optional[str], Form(None)],
-    response_format: Annotated[str, Form("json")],
-    temperature: Annotated[float, Form(0.0)],
-    prompt: Annotated[Optional[str], Form(None)],
+    model: Annotated[str, Form()] = "whisper-1",
+    language: Annotated[Optional[str], Form()] = None,
+    response_format: Annotated[str, Form()] = "json",
+    temperature: Annotated[float, Form()] = 0.0,
+    prompt: Annotated[Optional[str], Form()] = None,
 ):
     audio_bytes = await file.read()
     if not audio_bytes:
