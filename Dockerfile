@@ -1,15 +1,15 @@
-# Stage 1: Build CTranslate2 and ONNX Runtime with CUDA for ARM64 SBSA (Thor/Blackwell)
-# Using CUDA 12.6.3 instead of 13.0 due to ONNX Runtime incompatibility with CCCL 3.0
-# (thrust::unary_function removed in CUDA 13.0, see github.com/microsoft/onnxruntime/issues/23499)
-FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04@sha256:50efab398f76258daa91ceebb33b6467e40217c67ea44fb5a2cebc6be7d9cce3 AS builder
+# Stage 1: Build CTranslate2 and ONNX Runtime with CUDA for ARM64 SBSA (Jetson AGX Thor / JP 7)
+# CUDA 13.0.2 NGC base (newest cudnn ubuntu24.04 tag); host JetPack 7 uses driver-forward compat.
+FROM nvcr.io/nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04@sha256:5e9d0c68200eb01201617eb0d29a26d9a472104a2b8240de40dab58101ec948f AS builder
 
 ARG CTRANSLATE2_REF=383d063daf0bf338a22b491864cb2018eb8efd15
-ARG ONNXRUNTIME_REF=5c1b7ccbff7e5141c1da7a9d963d660e5741c319
+# v1.24.4: CUDA 13 nvcc flag checks (check_nvcc_compiler_flag for -Wstrict-aliasing)
+ARG ONNXRUNTIME_REF=2d924974ef147392ced8409d36bd6d2e7fcc8a74
+ARG BUILD_PARALLEL=10
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Build dependencies for both CTranslate2 and ONNX Runtime
-# Include ca-certificates for TLS downloads during ONNX Runtime FetchContent
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     cmake \
@@ -21,16 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Build CTranslate2 with CUDA support
-# Using v4.5.0 for stability - matches faster-whisper requirements
-# Thor (Blackwell) - patch CMakeLists.txt to force architecture since FindCUDA is outdated
-# Use compute_90 only - Hopper PTX runs on Blackwell via forward compatibility
-# (compute_100 requires CUDA 13.0+ but ONNX Runtime v1.20.1 incompatible with CUDA 13.0)
+# CTranslate2 with CUDA for Thor (sm_110 / compute_110)
 RUN git clone --filter=blob:none --recurse-submodules https://github.com/OpenNMT/CTranslate2.git /tmp/ctranslate2 \
     && cd /tmp/ctranslate2 \
     && git checkout --detach "${CTRANSLATE2_REF}" \
     && git submodule update --init --recursive \
-    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode=arch=compute_90,code=sm_90;-gencode=arch=compute_90,code=compute_90")/' CMakeLists.txt \
+    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode=arch=compute_110,code=sm_110;-gencode=arch=compute_110,code=compute_110")/' CMakeLists.txt \
     && mkdir build && cd build \
     && cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
@@ -40,33 +36,21 @@ RUN git clone --filter=blob:none --recurse-submodules https://github.com/OpenNMT
         -DWITH_OPENBLAS=OFF \
         -DOPENMP_RUNTIME=NONE \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
-    && make -j$(nproc) \
+    && make -j"${BUILD_PARALLEL}" \
     && make install
 
-# Build CTranslate2 Python bindings
 RUN cd /tmp/ctranslate2/python \
     && pip install --break-system-packages "pybind11==3.0.2" \
     && pip wheel --no-deps --wheel-dir /wheels . \
     && rm -rf /tmp/ctranslate2
 
-# Build ONNX Runtime with CUDA support for ARM64 SBSA
-# Using release branch for stability, with CUDA EP (Execution Provider)
-# Thor Blackwell GPU: compute_90 (Hopper binary) + compute_100 (Blackwell PTX for JIT)
-RUN pip install --break-system-packages \
+RUN pip install --break-system-packages --ignore-installed \
     "packaging==26.0" \
     "wheel==0.46.3" \
     "setuptools==82.0.1" \
     "numpy==2.4.3"
 
-# Pre-clone Eigen from git to avoid hash mismatch with GitLab's regenerated zip archives
-# ONNX Runtime v1.20.1 requires this specific commit
-RUN git clone https://gitlab.com/libeigen/eigen.git /tmp/eigen \
-    && cd /tmp/eigen \
-    && git checkout --detach e7248b26a1ed53fa030c5c459f7ea095dfd276ac
-
-# Build ONNX Runtime with CUDA EP explicitly enabled
-# Key flags for ARM64 SBSA: must set onnxruntime_USE_CUDA=ON explicitly
-# and ensure CMAKE_CUDA_ARCHITECTURES matches the target GPU
+# ONNX Runtime with CUDA EP for ARM64 SBSA (Thor sm_110)
 RUN git clone --filter=blob:none --recursive https://github.com/microsoft/onnxruntime.git /tmp/onnxruntime \
     && cd /tmp/onnxruntime \
     && git checkout --detach "${ONNXRUNTIME_REF}" \
@@ -78,37 +62,31 @@ RUN git clone --filter=blob:none --recursive https://github.com/microsoft/onnxru
         --use_cuda \
         --cuda_home /usr/local/cuda \
         --cudnn_home /usr \
-        --parallel $(nproc) \
+        --parallel "${BUILD_PARALLEL}" \
         --skip_tests \
         --allow_running_as_root \
         --cmake_extra_defines \
-            CMAKE_CUDA_ARCHITECTURES="90" \
-            FETCHCONTENT_SOURCE_DIR_EIGEN=/tmp/eigen \
+            CMAKE_CUDA_ARCHITECTURES="110" \
+            CMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
             onnxruntime_BUILD_UNIT_TESTS=OFF \
             onnxruntime_USE_CUDA=ON \
             onnxruntime_CUDA_HOME=/usr/local/cuda \
             onnxruntime_CUDNN_HOME=/usr \
     && cp /tmp/onnxruntime/build/Linux/Release/dist/*.whl /wheels/ \
-    && rm -rf /tmp/onnxruntime /tmp/eigen
+    && rm -rf /tmp/onnxruntime
 
 # Stage 2: Runtime image
-FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04@sha256:8aef630a54bc5c5146ae5ce68e6af5caa3df0fb690bb91544175c91f307e4356
+FROM nvcr.io/nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04@sha256:e5a14fe36b99bb7ef417749837aa7a5150c9b5fbd07474835aa707c82fff85ba
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
-# Copy CTranslate2 libraries from builder
 COPY --from=builder /usr/local/lib/libctranslate2* /usr/local/lib/
 COPY --from=builder /usr/local/include/ctranslate2 /usr/local/include/ctranslate2
 COPY --from=builder /wheels /wheels
 
-# Update library cache
 RUN ldconfig
 
-# System deps:
-# - python3 + pip: Python runtime
-# - ffmpeg: required for audio processing
-# - espeak-ng: used by kokoro for some fallback G2P cases
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -117,19 +95,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/bin/python
 
-# Install our custom-built wheels first (CTranslate2 and ONNX Runtime with CUDA)
 RUN pip install --no-cache-dir --break-system-packages /wheels/*.whl \
     && rm -rf /wheels
 
-# Python deps:
-# - fastapi + uvicorn: API server
-# - python-multipart: file uploads
-# - faster-whisper: uses our CUDA-enabled CTranslate2 (--no-deps to preserve our ONNX Runtime)
-# - kokoro-onnx: ONNX-based Kokoro TTS (--no-deps to use our CUDA ONNX Runtime)
-# - soundfile: write WAV to BytesIO
-# Pin direct dependencies so rebuilds stay reproducible.
-# IMPORTANT: Install faster-whisper and kokoro-onnx with --no-deps to prevent PyPI's
-# CPU-only onnxruntime from overwriting our CUDA-enabled onnxruntime_gpu wheel
 RUN pip install --no-cache-dir --break-system-packages \
     "fastapi==0.135.1" \
     "uvicorn[standard]==0.42.0" \
@@ -149,7 +117,6 @@ RUN pip install --no-cache-dir --break-system-packages \
 WORKDIR /app
 COPY server.py /app/server.py
 
-# Defaults - override with env vars
 ENV WHISPER_MODEL="Systran/faster-distil-whisper-large-v3" \
     WHISPER_DEVICE="cuda" \
     WHISPER_COMPUTE_TYPE="float16" \
